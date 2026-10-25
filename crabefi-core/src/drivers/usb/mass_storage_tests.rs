@@ -14,6 +14,7 @@ struct BotPeer {
     fail_reset: bool,
     protect_write: bool,
     short_write: bool,
+    unit_attention: bool,
     commands: Vec<[u8; 16]>,
     payloads: Vec<Vec<u8>>,
 }
@@ -31,6 +32,7 @@ impl Default for BotPeer {
             fail_reset: false,
             protect_write: false,
             short_write: false,
+            unit_attention: false,
             commands: Vec::new(),
             payloads: Vec::new(),
         }
@@ -111,8 +113,14 @@ impl UsbController for BotPeer {
                         data[3] = if self.mode10 == Some(true) { 0x80 } else { 0 };
                     }
                     scsi_cmd::REQUEST_SENSE => {
-                        data[0] = 0x70;
-                        data[2] = if self.protect_write { 7 } else { 5 };
+                        if self.unit_attention {
+                            data[0] = 0x70;
+                            data[2] = 6;
+                            self.unit_attention = false;
+                        } else {
+                            data[0] = 0x70;
+                            data[2] = if self.protect_write { 7 } else { 5 };
+                        }
                     }
                     _ => {}
                 }
@@ -135,6 +143,7 @@ impl UsbController for BotPeer {
         data[4..8].copy_from_slice(&command.tag.to_le_bytes());
         data[8..12].fill(0);
         let failed = match opcode {
+            scsi_cmd::TEST_UNIT_READY => self.unit_attention,
             scsi_cmd::MODE_SENSE_6 => self.mode6.is_none(),
             scsi_cmd::MODE_SENSE_10 => self.mode10.is_none(),
             scsi_cmd::SYNCHRONIZE_CACHE_10 => !self.cache_supported,
@@ -213,6 +222,21 @@ fn clean_read_only_devices_do_not_require_cache_commands() {
     let commands = peer.commands.len();
     disk.synchronize_cache(&mut peer).unwrap();
     assert_eq!(peer.commands.len(), commands);
+}
+
+#[test]
+fn init_recovers_from_unit_attention_by_requesting_sense() {
+    let mut peer = BotPeer {
+        unit_attention: true,
+        ..Default::default()
+    };
+    let mut disk = device();
+    disk.init(&mut peer).unwrap();
+    assert!(
+        peer.commands
+            .iter()
+            .any(|command| command[0] == scsi_cmd::REQUEST_SENSE)
+    );
 }
 
 #[test]

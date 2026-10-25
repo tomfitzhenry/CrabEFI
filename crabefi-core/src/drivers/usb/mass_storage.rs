@@ -273,6 +273,13 @@ impl UsbMassStorage {
                         attempt,
                         error
                     );
+                    // Clear any pending UNIT ATTENTION before retrying.
+                    match self.request_sense(controller) {
+                        Some(sense_key) => {
+                            log::debug!("USB Mass Storage: REQUEST_SENSE sense key {}", sense_key)
+                        }
+                        None => log::debug!("USB Mass Storage: REQUEST_SENSE failed"),
+                    }
                     readiness_error = error;
                     // Delay 100ms between retries
                     time::delay_ms(100);
